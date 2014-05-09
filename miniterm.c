@@ -53,7 +53,7 @@ int suspend = 0;	/**< Suspension flag, the serial port is closed */
  * \param buf Buffer pointer
  * \param len Buffer length
  */
-void dump(const char *buf, int len)
+static void dump(const char *buf, int len)
 {
 	char hextab[16] = "0123456789abcdef", line[80];
 	int i;
@@ -80,7 +80,7 @@ void dump(const char *buf, int len)
  * \param len Output buffer length
  * \return Packet length
  */
-int slip_receive(int fd, char *buf, int len)
+static int slip_receive(int fd, char *buf, int len)
 {
 	unsigned char ch;
 	int idx = 0;
@@ -132,7 +132,7 @@ int slip_receive(int fd, char *buf, int len)
  * \param old Pointer to termios structure for storing previous settings (may be \c NULL)
  * \return File descriptor
  */
-int serial_open(const char *device, int baudrate, int rtscts, struct termios *old)
+static int serial_open(const char *device, int baudrate, int rtscts, struct termios *old)
 {
 	struct termios new;
 	int fd;
@@ -169,7 +169,7 @@ int serial_open(const char *device, int baudrate, int rtscts, struct termios *ol
  * \param fd File descriptor
  * \param old Pointer to termios structure with old settings (may be \c NULL)
  */
-void serial_close(int fd, struct termios *old)
+static void serial_close(int fd, struct termios *old)
 {
 	if (old != NULL)
 		tcsetattr(fd, TCSANOW, old);
@@ -182,7 +182,7 @@ void serial_close(int fd, struct termios *old)
  *
  * \param argv0 Program name (\c argv[0])
  */
-void usage(const char *argv0)
+static void usage(const char *argv0)
 {
 	fprintf(stderr, "usage: %s [OPTIONS] PORT\n\n"
 		"  -s BAUD     set baud rate (default: 9600)\n"
@@ -199,7 +199,7 @@ void usage(const char *argv0)
  * \param sig Signal number
  *
  */
-void sigusr1(int sig)
+static void sigusr1(int sig)
 {
 	suspend = 1;
 }
@@ -209,7 +209,7 @@ void sigusr1(int sig)
  *
  * \param sig Signal number
  */
-void sigusr2(int sig)
+static void sigusr2(int sig)
 {
 	suspend = 0;
 }
@@ -463,6 +463,6 @@ int main(int argc, char **argv)
 
 	fprintf(stderr, "\nConnection closed.\n");
 
-	return 0;
+	return retval;
 }
 
