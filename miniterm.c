@@ -229,6 +229,56 @@ static void sigusr2(int sig)
 }
 
 /**
+ * Convert numeric baud rate to speed_t.
+ *
+ * \param baudrate Numberic baud rate
+ * \return speed_t baud rate
+ */
+static speed_t convert_baudrate(unsigned int baudrate)
+{
+	switch (baudrate) {
+		case 50: return B50;
+		case 75: return B75;
+		case 110: return B110;
+		case 134: return B134;
+		case 150: return B150;
+		case 200: return B200;
+		case 300: return B300;
+		case 600: return B600;
+		case 1200: return B1200;
+		case 1800: return B1800;
+		case 2400: return B2400;
+		case 4800: return B4800;
+		case 9600: return B9600;
+		case 19200: return B19200;
+		case 38400: return B38400;
+		case 57600: return B57600;
+		case 115200: return B115200;
+#ifdef B230400
+		case 230400: return B230400;
+#endif
+#ifdef B460800
+		case 460800: return B460800;
+#endif
+#ifdef B500000
+		case 500000: return B500000;
+#endif
+#ifdef B576000
+		case 576000: return B576000;
+#endif
+#ifdef B921600
+		case 921600: return B921600;
+#endif
+#ifdef B1000000
+		case 1000000: return B1000000;
+#endif
+		default:
+			fprintf(stderr, "Unknown baud rate %d\n", baudrate);
+			exit(1);
+	}
+}
+
+/**
  * Main routine.
  *
  * \param argc Argument count
@@ -238,7 +288,8 @@ static void sigusr2(int sig)
 int main(int argc, char **argv)
 {
 	struct termios stdin_termio, stdout_termio, serial_termio;
-	int fd, baudrate = 9600, b, retval = 0, ch;
+	int fd, retval = 0, ch;
+	speed_t baudrate = convert_baudrate(9600);
 	enum terminal_mode mode = MODE_TEXT;
 	bool escape = false, rtscts = false;
 	const char *device = NULL;
@@ -246,7 +297,7 @@ int main(int argc, char **argv)
 	while ((ch = getopt(argc, argv, "s:Srxh")) != -1) {
 		switch (ch) {
 			case 's':
-				baudrate = atoi(optarg);
+				baudrate = convert_baudrate(atoi(optarg));
 				break;
 			case 'r':
 				rtscts = true;
@@ -274,51 +325,10 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	switch (baudrate) {
-		case 50: b = B50; break;
-		case 75: b = B75; break;
-		case 110: b = B110; break;
-		case 134: b = B134; break;
-		case 150: b = B150; break;
-		case 200: b = B200; break;
-		case 300: b = B300; break;
-		case 600: b = B600; break;
-		case 1200: b = B1200; break;
-		case 1800: b = B1800; break;
-		case 2400: b = B2400; break;
-		case 4800: b = B4800; break;
-		case 9600: b = B9600; break;
-		case 19200: b = B19200; break;
-		case 38400: b = B38400; break;
-		case 57600: b = B57600; break;
-		case 115200: b = B115200; break;
-#ifdef B230400
-		case 230400: b = B230400; break;
-#endif
-#ifdef B460800
-		case 460800: b = B460800; break;
-#endif
-#ifdef B500000
-		case 500000: b = B500000; break;
-#endif
-#ifdef B576000
-		case 576000: b = B576000; break;
-#endif
-#ifdef B921600
-		case 921600: b = B921600; break;
-#endif
-#ifdef B1000000
-		case 1000000: b = B1000000; break;
-#endif
-		default:
-			fprintf(stderr, "Unknown baud rate %d\n", baudrate);
-			exit(1);
-	}
-	
 	signal(SIGUSR1, sigusr1);
 	signal(SIGUSR2, sigusr2);
 
-	if ((fd = serial_open(device, b, rtscts, &serial_termio)) == -1) {
+	if ((fd = serial_open(device, baudrate, rtscts, &serial_termio)) == -1) {
 		perror(device);
 		exit(1);
 	}
