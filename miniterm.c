@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2008, Wojtek Kaniewski <wojtekka@toxygen.net>
+ * Copyright (c) 2006-2014, Wojtek Kaniewski <wojtekka@toxygen.net>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -307,7 +307,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	fprintf(stderr, "Connected to %s at %dbps. Press '~.' to exit.\n\n", device, baudrate);
+	fprintf(stderr, "Connected to %s at %dbps. Press '~.' to exit, '~B' to send break.\n\n", device, baudrate);
 	
 	if (mode == 0) {
 		struct termios new;
@@ -392,6 +392,8 @@ int main(int argc, char **argv)
 				if (tilde) {
 					if (ibuf[i] == '~')
 						obuf[olen++] = '~';
+					else if (ibuf[i] == 'B')
+						tcsendbreak(fd, 0);
 					else if (ibuf[i] == '.') {
 						quit = 1;
 						break;
