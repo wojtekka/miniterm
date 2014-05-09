@@ -32,6 +32,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <termios.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -40,12 +41,23 @@
 #include <ctype.h>
 #include <signal.h>
 
-#define END	0300    /**< End of packet marker */
-#define ESC	0333    /**< Escape sequence marker */
-#define ESC_END	0334    /**< Escaped END byte */
-#define ESC_ESC	0335    /**< Escaped ESC byte */
+#define ESCAPE_CHARACTER '~'	/**< Escape character */
+#define BREAK_CHARACTER 'B'	/**< Break character */
+#define EXIT_CHARACTER '.'	/**< Exit character */
 
-int suspend = 0;	/**< Suspension flag, the serial port is closed */
+#define SLIP_END	0300    /**< End of packet marker */
+#define SLIP_ESC	0333    /**< Escape sequence marker */
+#define SLIP_ESC_END	0334    /**< Escaped END byte */
+#define SLIP_ESC_ESC	0335    /**< Escaped ESC byte */
+
+bool suspend = false;	/**< Suspension flag, the serial port is closed */
+
+/** Terminal mode */
+enum terminal_mode {
+	MODE_TEXT,	/**< Text terminal */
+	MODE_HEX,	/**< Hex terminal */
+	MODE_SLIP	/**< SLIP terminal */
+};
 
 /**
  * Dumps data buffer in hex.
@@ -53,10 +65,10 @@ int suspend = 0;	/**< Suspension flag, the serial port is closed */
  * \param buf Buffer pointer
  * \param len Buffer length
  */
-static void dump(const char *buf, int len)
+static void dump(const char *buf, size_t len)
 {
 	char hextab[16] = "0123456789abcdef", line[80];
-	int i;
+	size_t i;
 
 	for (i = 0; i < len; i++) {
 		
@@ -80,10 +92,10 @@ static void dump(const char *buf, int len)
  * \param len Output buffer length
  * \return Packet length
  */
-static int slip_receive(int fd, char *buf, int len)
+static int slip_receive(int fd, char *buf, size_t len)
 {
 	unsigned char ch;
-	int idx = 0;
+	size_t idx = 0;
 
 	for (;;) {
 		if (read(fd, &ch, 1) == -1) {
@@ -94,12 +106,12 @@ static int slip_receive(int fd, char *buf, int len)
 		}
 
 		switch (ch) {
-			case END:
+			case SLIP_END:
 				if (idx > 0)
 					return idx;
 				break;
 
-			case ESC:
+			case SLIP_ESC:
 				if (read(fd, &ch, 1) == -1) {
 					if (errno == EINTR)
 						continue;
@@ -107,11 +119,11 @@ static int slip_receive(int fd, char *buf, int len)
 					return -1;
 				}
 
-				if (ch == ESC_END) {
-					ch = END;
+				if (ch == SLIP_ESC_END) {
+					ch = SLIP_END;
 					break;
-				} else if (ch == ESC_ESC) {
-					ch = ESC;
+				} else if (ch == SLIP_ESC_ESC) {
+					ch = SLIP_ESC;
 					break;
 				}
 
@@ -132,12 +144,14 @@ static int slip_receive(int fd, char *buf, int len)
  * \param old Pointer to termios structure for storing previous settings (may be \c NULL)
  * \return File descriptor
  */
-static int serial_open(const char *device, int baudrate, int rtscts, struct termios *old)
+static int serial_open(const char *device, int baudrate, bool rtscts, struct termios *old)
 {
 	struct termios new;
 	int fd;
 
-	if ((fd = open(device, O_RDWR | O_NOCTTY | O_NONBLOCK)) == -1)
+	fd = open(device, O_RDWR | O_NOCTTY | O_NONBLOCK);
+	
+	if (fd == -1)
 		return -1;
 
 	fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
@@ -201,7 +215,7 @@ static void usage(const char *argv0)
  */
 static void sigusr1(int sig)
 {
-	suspend = 1;
+	suspend = true;
 }
 
 /**
@@ -211,7 +225,7 @@ static void sigusr1(int sig)
  */
 static void sigusr2(int sig)
 {
-	suspend = 0;
+	suspend = false;
 }
 
 /**
@@ -224,7 +238,9 @@ static void sigusr2(int sig)
 int main(int argc, char **argv)
 {
 	struct termios stdin_termio, stdout_termio, serial_termio;
-	int fd, baudrate = 9600, b, retval = 0, tilde = 0, ch, rtscts = 0, mode = 0;
+	int fd, baudrate = 9600, b, retval = 0, ch;
+	enum terminal_mode mode = MODE_TEXT;
+	bool escape = false, rtscts = false;
 	const char *device = NULL;
 
 	while ((ch = getopt(argc, argv, "s:Srxh")) != -1) {
@@ -233,13 +249,13 @@ int main(int argc, char **argv)
 				baudrate = atoi(optarg);
 				break;
 			case 'r':
-				rtscts = 1;
+				rtscts = true;
 				break;
 			case 'x':
-				mode = 1;
+				mode = MODE_HEX;
 				break;
 			case 'S':
-				mode = 2;
+				mode = MODE_SLIP;
 				break;
 			case 'h':
 				usage(argv[0]);
@@ -307,9 +323,9 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	fprintf(stderr, "Connected to %s at %dbps. Press '~.' to exit, '~B' to send break.\n\n", device, baudrate);
+	fprintf(stderr, "Connected to %s at %dbps. Press '%c%c' to exit, '%c%c' to send break.\n\n", device, baudrate, ESCAPE_CHARACTER, EXIT_CHARACTER, ESCAPE_CHARACTER, BREAK_CHARACTER);
 	
-	if (mode == 0) {
+	if (mode == MODE_TEXT) {
 		struct termios new;
 
 		new.c_cflag = B38400 | CS8 | CLOCAL | CREAD;
@@ -328,12 +344,13 @@ int main(int argc, char **argv)
 		tcsetattr(0, TCSANOW, &new);
 	}
 
-	if (mode == 2) {
+	if (mode == MODE_SLIP) {
 		char buf[4096];
 		int len;
 		
 		for (;;) {
-			if ((len = slip_receive(fd, buf, sizeof(buf))) == -1)
+			len = slip_receive(fd, buf, sizeof(buf));
+			if (len == -1)
 				break;
 			dump(buf, len);
 			printf("\n");
@@ -352,7 +369,8 @@ int main(int argc, char **argv)
 
 		if (!suspend && fd == -1) {
 			printf("Resuming...\n");
-			if ((fd = serial_open(device, baudrate, rtscts, &serial_termio)) == -1) {
+			fd = serial_open(device, baudrate, rtscts, &serial_termio);
+			if (fd == -1) {
 				perror(device);
 				exit(1);
 			}
@@ -360,7 +378,7 @@ int main(int argc, char **argv)
 
 		FD_ZERO(&rds);
 
-		if (mode == 0) {
+		if (mode == MODE_TEXT) {
 			FD_SET(0, &rds);
 			max = 0;
 		}
@@ -381,33 +399,34 @@ int main(int argc, char **argv)
 			break;
 		}
 
-		if (mode == 0 && FD_ISSET(0, &rds)) {
+		if (mode == MODE_TEXT && FD_ISSET(0, &rds)) {
 			char ibuf[4096], obuf[4096];
-			int i, wrote, ilen, olen = 0, quit = 0;
+			int i, wrote, ilen, olen = 0;
+			bool quit = false;
 
 			if ((ilen = read(0, ibuf, sizeof(ibuf))) < 1)
 				break;
 
 			for (i = 0; i < ilen; i++) {
-				if (tilde) {
-					if (ibuf[i] == '~')
-						obuf[olen++] = '~';
-					else if (ibuf[i] == 'B')
+				if (escape) {
+					if (ibuf[i] == ESCAPE_CHARACTER)
+						obuf[olen++] = ESCAPE_CHARACTER;
+					else if (ibuf[i] == BREAK_CHARACTER)
 						tcsendbreak(fd, 0);
-					else if (ibuf[i] == '.') {
+					else if (ibuf[i] == EXIT_CHARACTER) {
 						quit = 1;
 						break;
 					} else {
-						obuf[olen++] = '~';
+						obuf[olen++] = ESCAPE_CHARACTER;
 						obuf[olen++] = ibuf[i];
 					}
-					tilde = 0;
+					escape = false;
 				} else {
-					if (ibuf[i] == '~')
-						tilde = 1;
+					if (ibuf[i] == ESCAPE_CHARACTER)
+						escape = true;
 					else {
 						obuf[olen++] = ibuf[i];
-						tilde = 0;
+						escape = false;
 					}
 				}
 			}
@@ -434,7 +453,7 @@ int main(int argc, char **argv)
 			if ((len = read(fd, buf, sizeof(buf))) < 1)
 				break;
 
-			if (mode == 0) {
+			if (mode == MODE_TEXT) {
 				for (wrote = 0; wrote < len; ) {
 					res = write(1, buf + wrote, len - wrote);
 
@@ -453,7 +472,7 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (mode == 0) {
+	if (mode == MODE_TEXT) {
 		tcsetattr(0, TCSANOW, &stdin_termio);
 		tcsetattr(1, TCSANOW, &stdout_termio);
 	}
