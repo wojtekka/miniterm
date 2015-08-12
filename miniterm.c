@@ -40,9 +40,15 @@
 #include <string.h>
 #include <ctype.h>
 #include <signal.h>
+#include <sys/ioctl.h>
 
 #define ESCAPE_CHARACTER '~'	/**< Escape character */
+#define HELP_CHARACTER '?'	/**< Help character */
 #define BREAK_CHARACTER 'B'	/**< Break character */
+#define DTR_ON_CHARACTER 'D'	/**< DTR on character */
+#define DTR_OFF_CHARACTER 'd'	/**< DTR off character */
+#define RTS_ON_CHARACTER 'R'	/**< RTS on character */
+#define RTS_OFF_CHARACTER 'r'	/**< RTS off character */
 #define EXIT_CHARACTER '.'	/**< Exit character */
 
 #define SLIP_END	0300    /**< End of packet marker */
@@ -333,7 +339,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	fprintf(stderr, "Connected to %s at %dbps. Press '%c%c' to exit, '%c%c' to send break.\n\n", device, baudrate, ESCAPE_CHARACTER, EXIT_CHARACTER, ESCAPE_CHARACTER, BREAK_CHARACTER);
+	fprintf(stderr, "Connected to %s at %dbps. Press '%c%c' to exit, '%c%c' for help.\n\n", device, baudrate, ESCAPE_CHARACTER, EXIT_CHARACTER, ESCAPE_CHARACTER, HELP_CHARACTER);
 	
 	if (mode == MODE_TEXT) {
 		struct termios new;
@@ -421,9 +427,37 @@ int main(int argc, char **argv)
 				if (escape) {
 					if (ibuf[i] == ESCAPE_CHARACTER)
 						obuf[olen++] = ESCAPE_CHARACTER;
-					else if (ibuf[i] == BREAK_CHARACTER)
+					else if (ibuf[i] == HELP_CHARACTER) {
+						printf("\r\n%c%c  This help message", ESCAPE_CHARACTER, HELP_CHARACTER);
+						printf("\r\n%c%c  Send break", ESCAPE_CHARACTER, BREAK_CHARACTER);
+						printf("\r\n%c%c  Enable DTR", ESCAPE_CHARACTER, DTR_ON_CHARACTER);
+						printf("\r\n%c%c  Disable DTR", ESCAPE_CHARACTER, DTR_OFF_CHARACTER);
+						printf("\r\n%c%c  Enable RTS", ESCAPE_CHARACTER, RTS_ON_CHARACTER);
+						printf("\r\n%c%c  Disable RTS", ESCAPE_CHARACTER, RTS_OFF_CHARACTER);
+						printf("\r\n%c%c  Exit program\r\n", ESCAPE_CHARACTER, EXIT_CHARACTER);
+					} else if (ibuf[i] == BREAK_CHARACTER) {
 						tcsendbreak(fd, 0);
-					else if (ibuf[i] == EXIT_CHARACTER) {
+					} else if (ibuf[i] == DTR_ON_CHARACTER) {
+						int flags;
+						ioctl(fd, TIOCMGET, &flags);
+						flags |= TIOCM_DTR;
+						ioctl(fd, TIOCMSET, &flags);
+					} else if (ibuf[i] == DTR_OFF_CHARACTER) {
+						int flags;
+						ioctl(fd, TIOCMGET, &flags);
+						flags &= ~TIOCM_DTR;
+						ioctl(fd, TIOCMSET, &flags);
+					} else if (ibuf[i] == RTS_ON_CHARACTER) {
+						int flags;
+						ioctl(fd, TIOCMGET, &flags);
+						flags |= TIOCM_RTS;
+						ioctl(fd, TIOCMSET, &flags);
+					} else if (ibuf[i] == RTS_OFF_CHARACTER) {
+						int flags;
+						ioctl(fd, TIOCMGET, &flags);
+						flags &= ~TIOCM_RTS;
+						ioctl(fd, TIOCMSET, &flags);
+					} else if (ibuf[i] == EXIT_CHARACTER) {
 						quit = 1;
 						break;
 					} else {
