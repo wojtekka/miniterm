@@ -207,6 +207,8 @@ static void usage(const char *argv0)
 	fprintf(stderr, "usage: %s [OPTIONS] PORT\n\n"
 		"  -s BAUD     set baud rate (default: 9600)\n"
 		"  -r          enable RTS/CTS hardware flow control (default: disable)\n"
+		"  -d          enable DTR (default: disable)\n"
+		"  -R          enable RTS when flow control disabled (default: disable)\n"
 		"  -x          print received data in hex (read-only)\n"
 		"  -S          print received data as SLIP packets (read-only)\n"
 		"  -h          print this message\n"
@@ -295,18 +297,27 @@ int main(int argc, char **argv)
 {
 	struct termios stdin_termio, stdout_termio, serial_termio;
 	int fd, retval = 0, ch;
-	speed_t baudrate = convert_baudrate(9600);
+	int baudrate_value = 9600;
+	speed_t baudrate;
 	enum terminal_mode mode = MODE_TEXT;
 	bool escape = false, rtscts = false;
+	bool enable_rts = false, enable_dtr = false;
 	const char *device = NULL;
+	int flags;
 
-	while ((ch = getopt(argc, argv, "s:Srxh")) != -1) {
+	while ((ch = getopt(argc, argv, "s:SrdRxh")) != -1) {
 		switch (ch) {
 			case 's':
-				baudrate = convert_baudrate(atoi(optarg));
+				baudrate = atoi(optarg);
 				break;
 			case 'r':
 				rtscts = true;
+				break;
+			case 'd':
+				enable_dtr = true;
+				break;
+			case 'R':
+				enable_rts = true;
 				break;
 			case 'x':
 				mode = MODE_HEX;
@@ -334,12 +345,36 @@ int main(int argc, char **argv)
 	signal(SIGUSR1, sigusr1);
 	signal(SIGUSR2, sigusr2);
 
+	baudrate = convert_baudrate(baudrate_value);
+
 	if ((fd = serial_open(device, baudrate, rtscts, &serial_termio)) == -1) {
 		perror(device);
 		exit(1);
 	}
 
-	fprintf(stderr, "Connected to %s at %dbps. Press '%c%c' to exit, '%c%c' for help.\n\n", device, baudrate, ESCAPE_CHARACTER, EXIT_CHARACTER, ESCAPE_CHARACTER, HELP_CHARACTER);
+	if (ioctl(fd, TIOCMGET, &flags) == -1) {
+		perror(device);
+		exit(1);
+	}
+
+	if (!rtscts) {
+		if (enable_rts)
+			flags |= TIOCM_RTS;
+		else
+			flags &= ~TIOCM_RTS;
+	}
+
+	if (enable_dtr)
+		flags |= TIOCM_DTR;
+	else
+		flags &= ~TIOCM_DTR;
+
+	if (ioctl(fd, TIOCMSET, &flags) == -1) {
+		perror(device);
+		exit(1);
+	}
+
+	fprintf(stderr, "Connected to %s at %dbps. Press '%c%c' to exit, '%c%c' for help.\n\n", device, baudrate_value, ESCAPE_CHARACTER, EXIT_CHARACTER, ESCAPE_CHARACTER, HELP_CHARACTER);
 	
 	if (mode == MODE_TEXT) {
 		struct termios new;
