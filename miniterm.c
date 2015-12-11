@@ -79,7 +79,7 @@ static void dump(const char *buf, size_t len)
 	for (i = 0; i < len; i++) {
 		
 		if (i % 16 == 0)
-			snprintf(line, sizeof(line), "%04x:                                                                   ", i);
+			snprintf(line, sizeof(line), "%04x:                                                                   ", (unsigned int) i);
 						
 		line[6 + (i % 16) * 3 + ((i % 16) > 7 ? 1 : 0)] = hextab[(buf[i] >> 4) & 15];
 		line[7 + (i % 16) * 3 + ((i % 16) > 7 ? 1 : 0)] = hextab[buf[i] & 15];
@@ -308,7 +308,7 @@ int main(int argc, char **argv)
 	while ((ch = getopt(argc, argv, "s:SrdRxh")) != -1) {
 		switch (ch) {
 			case 's':
-				baudrate = atoi(optarg);
+				baudrate_value = atoi(optarg);
 				break;
 			case 'r':
 				rtscts = true;
