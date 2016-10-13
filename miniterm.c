@@ -41,6 +41,9 @@
 #include <ctype.h>
 #include <signal.h>
 #include <sys/ioctl.h>
+#ifdef __linux__
+#include <linux/serial.h>
+#endif
 
 #define ESCAPE_CHARACTER '~'	/**< Escape character */
 #define HELP_CHARACTER '?'	/**< Help character */
@@ -142,10 +145,63 @@ static int slip_receive(int fd, char *buf, size_t len)
 }
 
 /**
+ * Convert numeric baud rate to speed_t.
+ *
+ * \param baudrate Numberic baud rate
+ * \return speed_t baud rate
+ */
+static speed_t convert_baudrate(unsigned int baudrate)
+{
+	switch (baudrate) {
+		case 50: return B50;
+		case 75: return B75;
+		case 110: return B110;
+		case 134: return B134;
+		case 150: return B150;
+		case 200: return B200;
+		case 300: return B300;
+		case 600: return B600;
+		case 1200: return B1200;
+		case 1800: return B1800;
+		case 2400: return B2400;
+		case 4800: return B4800;
+		case 9600: return B9600;
+		case 19200: return B19200;
+		case 38400: return B38400;
+		case 57600: return B57600;
+		case 115200: return B115200;
+#ifdef B230400
+		case 230400: return B230400;
+#endif
+#ifdef B460800
+		case 460800: return B460800;
+#endif
+#ifdef B500000
+		case 500000: return B500000;
+#endif
+#ifdef B576000
+		case 576000: return B576000;
+#endif
+#ifdef B921600
+		case 921600: return B921600;
+#endif
+#ifdef B1000000
+		case 1000000: return B1000000;
+#endif
+#ifdef __linux__
+		default: return -1;
+#else
+		default:
+#endif
+	}
+}
+
+
+/**
  * Opens serial port
  *
  * \param device Device path
- * \param baudrate Baud rate (Bxxx constant, not decimal)
+ * \param baudrate Baud rate
  * \param rtscts RTS/CTS hardware flowcontrol flag
  * \param old Pointer to termios structure for storing previous settings (may be \c NULL)
  * \return File descriptor
@@ -154,6 +210,7 @@ static int serial_open(const char *device, int baudrate, bool rtscts, struct ter
 {
 	struct termios new;
 	int fd;
+	int b;
 
 	fd = open(device, O_RDWR | O_NOCTTY | O_NONBLOCK);
 	
@@ -164,6 +221,36 @@ static int serial_open(const char *device, int baudrate, bool rtscts, struct ter
 
 	if (old != NULL)
 		tcgetattr(fd, old);
+
+	b = convert_baudrate(baudrate);
+
+	if (b == -1) {
+#ifdef __linux__
+		struct serial_struct ss;
+
+		if (ioctl(fd, TIOCGSERIAL, &ss) == -1) {
+			close(fd);
+			return -1;
+		}
+
+		ss.flags = (ss.flags & ~ASYNC_SPD_MASK) | ASYNC_SPD_CUST;
+		ss.custom_divisor = (ss.baud_base + (baudrate / 2)) / baudrate;
+
+		if (ioctl(fd, TIOCSSERIAL, &ss) == -1) {
+			close(fd);
+			return -1;
+		}
+
+		if (ss.baud_base / ss.custom_divisor != baudrate)
+			fprintf(stderr, "Baud rate set to %d\n", ss.baud_base / ss.custom_divisor);
+
+		baudrate = B38400;
+#else
+		fprintf(stderr, "Invalid baud rate\n");
+		close(fd);
+		return -1;
+#endif
+	}
 
 	new.c_cflag = baudrate | CS8 | CREAD;
 
@@ -191,6 +278,15 @@ static int serial_open(const char *device, int baudrate, bool rtscts, struct ter
  */
 static void serial_close(int fd, struct termios *old)
 {
+#ifdef __linux__
+	struct serial_struct ss;
+
+	if (ioctl(fd, TIOCGSERIAL, &ss) != -1) {
+		ss.flags = ss.flags & ~ASYNC_SPD_MASK;
+		ioctl(fd, TIOCSSERIAL, &ss);
+	}
+#endif
+
 	if (old != NULL)
 		tcsetattr(fd, TCSANOW, old);
 
@@ -237,56 +333,6 @@ static void sigusr2(int sig)
 }
 
 /**
- * Convert numeric baud rate to speed_t.
- *
- * \param baudrate Numberic baud rate
- * \return speed_t baud rate
- */
-static speed_t convert_baudrate(unsigned int baudrate)
-{
-	switch (baudrate) {
-		case 50: return B50;
-		case 75: return B75;
-		case 110: return B110;
-		case 134: return B134;
-		case 150: return B150;
-		case 200: return B200;
-		case 300: return B300;
-		case 600: return B600;
-		case 1200: return B1200;
-		case 1800: return B1800;
-		case 2400: return B2400;
-		case 4800: return B4800;
-		case 9600: return B9600;
-		case 19200: return B19200;
-		case 38400: return B38400;
-		case 57600: return B57600;
-		case 115200: return B115200;
-#ifdef B230400
-		case 230400: return B230400;
-#endif
-#ifdef B460800
-		case 460800: return B460800;
-#endif
-#ifdef B500000
-		case 500000: return B500000;
-#endif
-#ifdef B576000
-		case 576000: return B576000;
-#endif
-#ifdef B921600
-		case 921600: return B921600;
-#endif
-#ifdef B1000000
-		case 1000000: return B1000000;
-#endif
-		default:
-			fprintf(stderr, "Unknown baud rate %d\n", baudrate);
-			exit(1);
-	}
-}
-
-/**
  * Main routine.
  *
  * \param argc Argument count
@@ -297,8 +343,7 @@ int main(int argc, char **argv)
 {
 	struct termios stdin_termio, stdout_termio, serial_termio;
 	int fd, retval = 0, ch;
-	int baudrate_value = 9600;
-	speed_t baudrate;
+	int baudrate = 9600;
 	enum terminal_mode mode = MODE_TEXT;
 	bool escape = false, rtscts = false;
 	bool enable_rts = false, enable_dtr = false;
@@ -308,7 +353,7 @@ int main(int argc, char **argv)
 	while ((ch = getopt(argc, argv, "s:SrdRxh")) != -1) {
 		switch (ch) {
 			case 's':
-				baudrate_value = atoi(optarg);
+				baudrate = atoi(optarg);
 				break;
 			case 'r':
 				rtscts = true;
@@ -345,8 +390,6 @@ int main(int argc, char **argv)
 	signal(SIGUSR1, sigusr1);
 	signal(SIGUSR2, sigusr2);
 
-	baudrate = convert_baudrate(baudrate_value);
-
 	if ((fd = serial_open(device, baudrate, rtscts, &serial_termio)) == -1) {
 		perror(device);
 		exit(1);
@@ -374,7 +417,7 @@ int main(int argc, char **argv)
 		exit(1);
 	}
 
-	fprintf(stderr, "Connected to %s at %dbps. Press '%c%c' to exit, '%c%c' for help.\n\n", device, baudrate_value, ESCAPE_CHARACTER, EXIT_CHARACTER, ESCAPE_CHARACTER, HELP_CHARACTER);
+	fprintf(stderr, "Connected to %s at %dbps. Press '%c%c' to exit, '%c%c' for help.\n\n", device, baudrate, ESCAPE_CHARACTER, EXIT_CHARACTER, ESCAPE_CHARACTER, HELP_CHARACTER);
 	
 	if (mode == MODE_TEXT) {
 		struct termios new;
@@ -413,13 +456,13 @@ int main(int argc, char **argv)
 		int res, max = 0;
 
 		if (suspend && fd != -1) {
-			printf("Suspending...\n");
+			printf("\r\nSuspending...\r\n");
 			serial_close(fd, &serial_termio);
 			fd = -1;
 		}
 
 		if (!suspend && fd == -1) {
-			printf("Resuming...\n");
+			printf("\r\nResuming...\r\n");
 			fd = serial_open(device, baudrate, rtscts, &serial_termio);
 			if (fd == -1) {
 				perror(device);
