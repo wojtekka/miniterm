@@ -192,6 +192,8 @@ static speed_t convert_baudrate(unsigned int baudrate)
 		default: return -1;
 #else
 		default:
+			fprintf(stderr, "Unknown baud rate %d\n", baudrate);
+			exit(1);
 #endif
 	}
 }
@@ -244,7 +246,7 @@ static int serial_open(const char *device, int baudrate, bool rtscts, struct ter
 		if (ss.baud_base / ss.custom_divisor != baudrate)
 			fprintf(stderr, "Baud rate set to %d\n", ss.baud_base / ss.custom_divisor);
 
-		baudrate = B38400;
+		b = B38400;
 #else
 		fprintf(stderr, "Invalid baud rate\n");
 		close(fd);
@@ -252,7 +254,7 @@ static int serial_open(const char *device, int baudrate, bool rtscts, struct ter
 #endif
 	}
 
-	new.c_cflag = baudrate | CS8 | CREAD;
+	new.c_cflag = b | CS8 | CREAD;
 
 	if (rtscts)
 		new.c_cflag |= CRTSCTS;
