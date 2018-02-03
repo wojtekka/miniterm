@@ -538,7 +538,7 @@ int main(int argc, char **argv)
 						flags &= ~TIOCM_RTS;
 						ioctl(fd, TIOCMSET, &flags);
 					} else if (ibuf[i] == EXIT_CHARACTER) {
-						quit = 1;
+						quit = true;
 						break;
 					} else {
 						obuf[olen++] = ESCAPE_CHARACTER;
