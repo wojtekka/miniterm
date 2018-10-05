@@ -305,7 +305,7 @@ static void usage(const char *argv0)
 	fprintf(stderr, "usage: %s [OPTIONS] PORT\n\n"
 		"  -s BAUD     set baud rate (default: 9600)\n"
 		"  -r          enable RTS/CTS hardware flow control (default: disable)\n"
-		"  -d          enable DTR (default: disable)\n"
+		"  -D          enable DTR (default: disable)\n"
 		"  -R          enable RTS when flow control disabled (default: disable)\n"
 		"  -x          print received data in hex (read-only)\n"
 		"  -S          print received data as SLIP packets (read-only)\n"
@@ -352,7 +352,7 @@ int main(int argc, char **argv)
 	const char *device = NULL;
 	int flags;
 
-	while ((ch = getopt(argc, argv, "s:SrdRxh")) != -1) {
+	while ((ch = getopt(argc, argv, "s:SrDRxh")) != -1) {
 		switch (ch) {
 			case 's':
 				baudrate = atoi(optarg);
@@ -360,7 +360,7 @@ int main(int argc, char **argv)
 			case 'r':
 				rtscts = true;
 				break;
-			case 'd':
+			case 'D':
 				enable_dtr = true;
 				break;
 			case 'R':
