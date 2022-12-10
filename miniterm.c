@@ -309,6 +309,7 @@ static void usage(const char *argv0)
         "  -x          print received data in hex (read-only)\n"
         "  -S          print received data as SLIP packets (read-only)\n"
         "  -f PATH     file to be sent on request\n"
+        "  -p          enable persistent mode, don't quit when port is not available\n"
         "  -h          print this message\n"
         "\n", argv0);
 }
@@ -335,6 +336,14 @@ static void sigusr2(int sig)
 }
 
 /**
+ * Print help on first connection.
+ */
+static void print_help(void)
+{
+    fprintf(stderr, "Press '%c%c' to exit, '%c%c' for help.\r\n\r\n", ESCAPE_CHARACTER, EXIT_CHARACTER, ESCAPE_CHARACTER, HELP_CHARACTER);
+}
+
+/**
  * Main routine.
  *
  * \param argc Argument count
@@ -343,19 +352,27 @@ static void sigusr2(int sig)
  */
 int main(int argc, char **argv)
 {
-    struct termios stdin_termio, stdout_termio, serial_termio;
-    int fd, retval = 0, ch;
+    struct termios stdin_termio;
+    struct termios stdout_termio;
+    struct termios serial_termio;
+    int fd = -1;
+    int retval = 0;
+    int ch;
     int baudrate = 9600;
     enum terminal_mode mode = MODE_TEXT;
-    bool escape = false, rtscts = false;
-    bool enable_rts = false, enable_dtr = false;
+    bool escape = false;
+    bool rtscts = false;
+    bool enable_rts = false;
+    bool enable_dtr = false;
     const char *device = NULL;
     const char *send_file = NULL;
     int flags;
     char *write_buf = NULL;
     size_t write_len = 0;
+    bool persistent = false;
+    bool first_open = true;
 
-    while ((ch = getopt(argc, argv, "s:f:SrDRxh")) != -1) {
+    while ((ch = getopt(argc, argv, "s:f:SrDRxhp")) != -1) {
         switch (ch) {
             case 's':
                 baudrate = atoi(optarg);
@@ -378,6 +395,9 @@ int main(int argc, char **argv)
             case 'f':
                 send_file = optarg;
                 break;
+            case 'p':
+                persistent = true;
+                break;
             case 'h':
                 usage(argv[0]);
                 exit(0);
@@ -398,35 +418,6 @@ int main(int argc, char **argv)
     signal(SIGUSR1, sigusr1);
     signal(SIGUSR2, sigusr2);
 
-    if ((fd = serial_open(device, baudrate, rtscts, &serial_termio)) == -1) {
-        perror(device);
-        exit(1);
-    }
-
-    if (ioctl(fd, TIOCMGET, &flags) == -1) {
-        perror(device);
-        exit(1);
-    }
-
-    if (!rtscts) {
-        if (enable_rts)
-            flags |= TIOCM_RTS;
-        else
-            flags &= ~TIOCM_RTS;
-    }
-
-    if (enable_dtr)
-        flags |= TIOCM_DTR;
-    else
-        flags &= ~TIOCM_DTR;
-
-    if (ioctl(fd, TIOCMSET, &flags) == -1) {
-        perror(device);
-        exit(1);
-    }
-
-    fprintf(stderr, "Connected to %s at %dbps. Press '%c%c' to exit, '%c%c' for help.\n\n", device, baudrate, ESCAPE_CHARACTER, EXIT_CHARACTER, ESCAPE_CHARACTER, HELP_CHARACTER);
-
     if (mode == MODE_TEXT) {
         struct termios new;
 
@@ -446,19 +437,6 @@ int main(int argc, char **argv)
         tcsetattr(0, TCSANOW, &new);
     }
 
-    if (mode == MODE_SLIP) {
-        char buf[4096];
-        int len;
-
-        for (;;) {
-            len = slip_receive(fd, buf, sizeof(buf));
-            if (len == -1)
-                break;
-            dump(buf, len);
-            printf("\n");
-        }
-    }
-
     for (;;) {
         fd_set rds, wds;
         int res, max = 0;
@@ -470,11 +448,63 @@ int main(int argc, char **argv)
         }
 
         if (!suspend && fd == -1) {
-            printf("\r\nResuming...\r\n");
-            fd = serial_open(device, baudrate, rtscts, &serial_termio);
-            if (fd == -1) {
-                perror(device);
-                exit(1);
+            if ((fd = serial_open(device, baudrate, rtscts, &serial_termio)) == -1) {
+                if (first_open)
+                    fprintf(stderr, "Failed to open %s: %s\r\n", device, strerror(errno));
+
+                if (!persistent) {
+                    exit(1);
+                } else {
+                    if (first_open) {
+                        print_help();
+                        first_open = false;
+                    }
+                }
+            } else {
+                if (ioctl(fd, TIOCMGET, &flags) == -1) {
+                    perror(device);
+                    exit(1);
+                }
+
+                if (!rtscts) {
+                    if (enable_rts)
+                        flags |= TIOCM_RTS;
+                    else
+                        flags &= ~TIOCM_RTS;
+                }
+
+                if (enable_dtr)
+                    flags |= TIOCM_DTR;
+                else
+                    flags &= ~TIOCM_DTR;
+
+                if (ioctl(fd, TIOCMSET, &flags) == -1) {
+                    perror(device);
+                    exit(1);
+                }
+
+                fprintf(stderr, "Connected to %s at %dbps.\r\n", device, baudrate);
+                if (first_open) {
+                    print_help();
+                    first_open = false;
+                }
+
+                if (mode == MODE_SLIP) {
+                    char buf[4096];
+                    int len;
+
+                    for (;;) {
+                        len = slip_receive(fd, buf, sizeof(buf));
+                        if (len == -1)
+                            break;
+                        dump(buf, len);
+                        printf("\n");
+                    }
+                    close(fd);
+                    fd = -1;
+                    if (!persistent)
+                        exit(1);
+                }
             }
         }
 
@@ -493,7 +523,15 @@ int main(int argc, char **argv)
             max = fd;
         }
 
-        res = select(max + 1, &rds, &wds, NULL, NULL);
+        struct timeval timeout_tmp;
+        struct timeval *timeout = NULL;
+        if (persistent && fd == -1) {
+            timeout = &timeout_tmp;
+            timeout->tv_sec = 0;
+            timeout->tv_usec = 100000;
+        }
+
+        res = select(max + 1, &rds, &wds, NULL, timeout);
 
         if (res < 0) {
             if (errno == EINTR)
@@ -599,7 +637,7 @@ int main(int argc, char **argv)
                 }
             }
 
-            if (write_buf != NULL) {
+            if (olen > 0) {
                 char *tmp = realloc(write_buf, write_len + olen);
                 if (tmp == NULL) {
                     fprintf(stderr, "\r\nOut of memory\r\n");
@@ -609,25 +647,6 @@ int main(int argc, char **argv)
                     write_buf = tmp;
                     memcpy(write_buf + write_len, obuf, olen);
                     write_len += olen;
-                }
-            } else {
-                res = write(fd, obuf, olen);
-
-                if (res == -1) {
-                    retval = 1;
-                    break;
-                }
-
-                if (res < olen) {
-                    write_buf = malloc(olen - res);
-                    if (write_buf == NULL) {
-                        fprintf(stderr, "\r\nOut of memory\r\n");
-                        retval = 1;
-                        break;
-                    } else {
-                        memmove(write_buf, obuf + res, olen - res);
-                        write_len = olen - res;
-                    }
                 }
             }
 
@@ -639,8 +658,14 @@ int main(int argc, char **argv)
             int res = write(fd, write_buf, write_len);
 
             if (res == -1) {
-                retval = 1;
-                break;
+                if (!persistent) {
+                    retval = 1;
+                    break;
+                } else {
+                    perror(device);
+                    close(fd);
+                    fd = -1;
+                }
             }
 
             if (res == write_len) {
@@ -657,8 +682,19 @@ int main(int argc, char **argv)
             char buf[4096];
             int len, wrote, res;
 
-            if ((len = read(fd, buf, sizeof(buf))) < 1)
-                break;
+            if ((len = read(fd, buf, sizeof(buf))) < 1) {
+                if (len == 0)
+                    fprintf(stderr, "\r\nDisconnected from %s\r\n", device);
+                else if (len == -1)
+                    fprintf(stderr, "\r\n%s: %s\r\n", device, strerror(errno));
+
+                if (!persistent) {
+                    break;
+                } else {
+                    close(fd);
+                    fd = -1;
+                }
+            }
 
             if (mode == MODE_TEXT) {
                 for (wrote = 0; wrote < len; ) {
