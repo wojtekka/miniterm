@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2014, Wojtek Kaniewski <wojtekka@toxygen.net>
+ * Copyright (c) 2006-2022, Wojtek Kaniewski <wojtekka@toxygen.net>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
@@ -52,6 +52,7 @@
 #define DTR_OFF_CHARACTER 'd'   /**< DTR off character */
 #define RTS_ON_CHARACTER 'R'    /**< RTS on character */
 #define RTS_OFF_CHARACTER 'r'   /**< RTS off character */
+#define SEND_CHARACTER 's'      /**< Send file character */
 #define EXIT_CHARACTER '.'      /**< Exit character */
 
 #define SLIP_END        0300    /**< End of packet marker */
@@ -219,8 +220,6 @@ static int serial_open(const char *device, int baudrate, bool rtscts, struct ter
     if (fd == -1)
         return -1;
 
-    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) & ~O_NONBLOCK);
-
     if (old != NULL)
         tcgetattr(fd, old);
 
@@ -309,6 +308,7 @@ static void usage(const char *argv0)
         "  -R          enable RTS when flow control disabled (default: disable)\n"
         "  -x          print received data in hex (read-only)\n"
         "  -S          print received data as SLIP packets (read-only)\n"
+        "  -f PATH     file to be sent on request\n"
         "  -h          print this message\n"
         "\n", argv0);
 }
@@ -350,9 +350,12 @@ int main(int argc, char **argv)
     bool escape = false, rtscts = false;
     bool enable_rts = false, enable_dtr = false;
     const char *device = NULL;
+    const char *send_file = NULL;
     int flags;
+    char *write_buf = NULL;
+    size_t write_len = 0;
 
-    while ((ch = getopt(argc, argv, "s:SrDRxh")) != -1) {
+    while ((ch = getopt(argc, argv, "s:f:SrDRxh")) != -1) {
         switch (ch) {
             case 's':
                 baudrate = atoi(optarg);
@@ -371,6 +374,9 @@ int main(int argc, char **argv)
                 break;
             case 'S':
                 mode = MODE_SLIP;
+                break;
+            case 'f':
+                send_file = optarg;
                 break;
             case 'h':
                 usage(argv[0]);
@@ -454,7 +460,7 @@ int main(int argc, char **argv)
     }
 
     for (;;) {
-        fd_set rds;
+        fd_set rds, wds;
         int res, max = 0;
 
         if (suspend && fd != -1) {
@@ -473,6 +479,7 @@ int main(int argc, char **argv)
         }
 
         FD_ZERO(&rds);
+        FD_ZERO(&wds);
 
         if (mode == MODE_TEXT) {
             FD_SET(0, &rds);
@@ -481,10 +488,12 @@ int main(int argc, char **argv)
 
         if (fd != -1) {
             FD_SET(fd, &rds);
+            if (write_buf != NULL && write_len > 0)
+                FD_SET(fd, &wds);
             max = fd;
         }
 
-        res = select(max + 1, &rds, NULL, NULL, NULL);
+        res = select(max + 1, &rds, &wds, NULL, NULL);
 
         if (res < 0) {
             if (errno == EINTR)
@@ -497,7 +506,7 @@ int main(int argc, char **argv)
 
         if (mode == MODE_TEXT && FD_ISSET(0, &rds)) {
             char ibuf[4096], obuf[4096];
-            int i, wrote, ilen, olen = 0;
+            int i, ilen, olen = 0;
             bool quit = false;
 
             if ((ilen = read(0, ibuf, sizeof(ibuf))) < 1)
@@ -514,6 +523,7 @@ int main(int argc, char **argv)
                         printf("\r\n%c%c  Disable DTR", ESCAPE_CHARACTER, DTR_OFF_CHARACTER);
                         printf("\r\n%c%c  Enable RTS", ESCAPE_CHARACTER, RTS_ON_CHARACTER);
                         printf("\r\n%c%c  Disable RTS", ESCAPE_CHARACTER, RTS_OFF_CHARACTER);
+                        printf("\r\n%c%c  Send file", ESCAPE_CHARACTER, SEND_CHARACTER);
                         printf("\r\n%c%c  Exit program\r\n", ESCAPE_CHARACTER, EXIT_CHARACTER);
                     } else if (ibuf[i] == BREAK_CHARACTER) {
                         tcsendbreak(fd, 0);
@@ -537,6 +547,40 @@ int main(int argc, char **argv)
                         ioctl(fd, TIOCMGET, &flags);
                         flags &= ~TIOCM_RTS;
                         ioctl(fd, TIOCMSET, &flags);
+                    } else if (ibuf[i] == SEND_CHARACTER) {
+                        if (send_file == NULL) {
+                            fprintf(stderr, "\r\nFile not provided\r\n");
+                        } else {
+                            int file_fd = open(send_file, O_RDONLY);
+                            if (file_fd == -1) {
+                                fprintf(stderr, "\r\nFailed to open '%s': %s\r\n", send_file, strerror(errno));
+                            } else {
+                                off_t file_len = lseek(file_fd, 0, SEEK_END);
+                                if (file_len == (off_t)-1) {
+                                    fprintf(stderr, "\r\nFailed to check file size. Is it a regular file?\r\n");
+                                } else {
+                                    lseek(file_fd, 0, SEEK_SET);
+                                    char *tmp = realloc(write_buf, write_len + file_len);
+                                    if (tmp == NULL) {
+                                        fprintf(stderr, "\r\nOut of memory\r\n");
+                                        quit = true;
+                                        retval = 1;
+                                        close(file_fd);
+                                        break;
+                                    } else {
+                                        write_buf = tmp;
+                                        int res = read(file_fd, write_buf + write_len, file_len);
+                                        if (res != file_len) {
+                                            fprintf(stderr, "\r\nFailed to read %zu bytes from '%s'\r\n", file_len, send_file);
+                                        } else {
+                                            fprintf(stderr, "\r\nRead %zu bytes, sending...\r\n", file_len);
+                                            write_len += file_len;
+                                        }
+                                    }
+                                }
+                                close(file_fd);
+                            }
+                        }
                     } else if (ibuf[i] == EXIT_CHARACTER) {
                         quit = true;
                         break;
@@ -555,19 +599,58 @@ int main(int argc, char **argv)
                 }
             }
 
-            for (wrote = 0; olen && wrote < olen; ) {
-                res = write(fd, obuf + wrote, olen - wrote);
+            if (write_buf != NULL) {
+                char *tmp = realloc(write_buf, write_len + olen);
+                if (tmp == NULL) {
+                    fprintf(stderr, "\r\nOut of memory\r\n");
+                    retval = 1; 
+                    break;
+                } else {
+                    write_buf = tmp;
+                    memcpy(write_buf + write_len, obuf, olen);
+                    write_len += olen;
+                }
+            } else {
+                res = write(fd, obuf, olen);
 
-                if (res < 1) {
+                if (res == -1) {
                     retval = 1;
                     break;
                 }
 
-                wrote += res;
+                if (res < olen) {
+                    write_buf = malloc(olen - res);
+                    if (write_buf == NULL) {
+                        fprintf(stderr, "\r\nOut of memory\r\n");
+                        retval = 1;
+                        break;
+                    } else {
+                        memmove(write_buf, obuf + res, olen - res);
+                        write_len = olen - res;
+                    }
+                }
             }
 
             if (quit)
                 break;
+        }
+
+        if (fd != -1 && FD_ISSET(fd, &wds)) {
+            int res = write(fd, write_buf, write_len);
+
+            if (res == -1) {
+                retval = 1;
+                break;
+            }
+
+            if (res == write_len) {
+                free(write_buf);
+                write_buf = NULL;
+                write_len = 0;
+            } else {
+                memmove(write_buf, write_buf + res, write_len - res);
+                write_len -= res;
+            }
         }
 
         if (fd != -1 && FD_ISSET(fd, &rds)) {
