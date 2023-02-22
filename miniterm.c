@@ -453,7 +453,8 @@ int main(int argc, char **argv)
                     fprintf(stderr, "Failed to open %s: %s\r\n", device, strerror(errno));
 
                 if (!persistent) {
-                    exit(1);
+                    retval = 1;
+                    break;
                 } else {
                     if (first_open) {
                         print_help();
@@ -463,7 +464,8 @@ int main(int argc, char **argv)
             } else {
                 if (ioctl(fd, TIOCMGET, &flags) == -1) {
                     perror(device);
-                    exit(1);
+                    retval = 1;
+                    break;
                 }
 
                 if (!rtscts) {
@@ -480,7 +482,8 @@ int main(int argc, char **argv)
 
                 if (ioctl(fd, TIOCMSET, &flags) == -1) {
                     perror(device);
-                    exit(1);
+                    retval = 1;
+                    break;
                 }
 
                 fprintf(stderr, "Connected to %s at %dbps.\r\n", device, baudrate);
@@ -502,8 +505,10 @@ int main(int argc, char **argv)
                     }
                     close(fd);
                     fd = -1;
-                    if (!persistent)
-                        exit(1);
+                    if (!persistent) {
+                        retval = 1;
+                        break;
+                    }
                 }
             }
         }
@@ -720,10 +725,10 @@ int main(int argc, char **argv)
         tcsetattr(1, TCSANOW, &stdout_termio);
     }
 
-    if (fd != -1)
+    if (fd != -1) {
         serial_close(fd, &serial_termio);
-
-    fprintf(stderr, "\nConnection closed.\n");
+        fprintf(stderr, "\nConnection closed.\n");
+    }
 
     return retval;
 }
