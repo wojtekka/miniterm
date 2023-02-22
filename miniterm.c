@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2022, Wojtek Kaniewski <wojtekka@toxygen.net>
+ * Copyright (c) 2006-2023, Wojtek Kaniewski <wojtekka@toxygen.net>
  * All rights reserved.
  * 
  * Redistribution and use in source and binary forms, with or without
